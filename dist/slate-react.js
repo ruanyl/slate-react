@@ -1952,7 +1952,7 @@ function SlateReactPlaceholder() {
       };
 
       return React.createElement(
-        React.Fragment,
+        'span',
         null,
         React.createElement(
           'span',
@@ -7183,7 +7183,7 @@ var Content = function (_React$Component) {
 
       // Otherwise, figure out which DOM nodes should be selected...
       if (selection.isFocused && selection.isSet) {
-        var current = !!rangeCount && native.getRangeAt(0);
+        var current = !!native.rangeCount && native.getRangeAt(0);
         var range = findDOMRange(selection, window);
 
         if (!range) {
