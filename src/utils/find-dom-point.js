@@ -21,11 +21,17 @@ function findDOMPoint(point, win = window) {
 
   for (const text of texts) {
     const node = text.childNodes[0]
-    const { length } = node.textContent
-    const end = start + length
+    const domLength = node.textContent.length
+    let slateLength = domLength
+
+    if (text.hasAttribute('data-slate-length')) {
+      slateLength = parseInt(text.getAttribute('data-slate-length'), 10)
+    }
+
+    const end = start + slateLength
 
     if (point.offset <= end) {
-      const offset = Math.max(0, point.offset - start)
+      const offset = Math.min(domLength, Math.max(0, point.offset - start))
       return { node, offset }
     }
 

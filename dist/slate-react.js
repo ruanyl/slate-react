@@ -1858,7 +1858,7 @@ var index$2 = (function (condition, message) {
  * @type {Array}
  */
 
-var EVENT_HANDLERS = ['onBeforeInput', 'onBlur', 'onClick', 'onContextMenu', 'onCompositionEnd', 'onCompositionStart', 'onCopy', 'onCut', 'onDragEnd', 'onDragEnter', 'onDragExit', 'onDragLeave', 'onDragOver', 'onDragStart', 'onDrop', 'onInput', 'onFocus', 'onKeyDown', 'onKeyUp', 'onPaste', 'onSelect'];
+var EVENT_HANDLERS = ['onBeforeInput', 'onBlur', 'onClick', 'onContextMenu', 'onCompositionEnd', 'onCompositionStart', 'onCopy', 'onCut', 'onDragEnd', 'onDragEnter', 'onDragExit', 'onDragLeave', 'onDragOver', 'onDragStart', 'onDrop', 'onInput', 'onFocus', 'onKeyDown', 'onKeyUp', 'onMouseDown', 'onMouseUp', 'onPaste', 'onSelect'];
 
 var isProduction$2 = "development" === 'production';
 var prefix$1 = 'Invariant failed';
@@ -2464,7 +2464,7 @@ if (isBrowser) {
  */
 
 var FEATURE_RULES = [['inputeventslevel1', function (window) {
-  var event = window.InputEvent ? new InputEvent('input') : {};
+  var event = window.InputEvent ? new window.InputEvent('input') : {};
   var support = 'inputType' in event;
   return support;
 }], ['inputeventslevel2', function (window) {
@@ -3458,12 +3458,17 @@ function findDOMPoint(point) {
       var text = _step.value;
 
       var node = text.childNodes[0];
-      var length = node.textContent.length;
+      var domLength = node.textContent.length;
+      var slateLength = domLength;
 
-      var end = start + length;
+      if (text.hasAttribute('data-slate-length')) {
+        slateLength = parseInt(text.getAttribute('data-slate-length'), 10);
+      }
+
+      var end = start + slateLength;
 
       if (point.offset <= end) {
-        var offset = Math.max(0, point.offset - start);
+        var offset = Math.min(domLength, Math.max(0, point.offset - start));
         return { node: node, offset: offset };
       }
 
@@ -3876,6 +3881,7 @@ var debug$2 = browser$1('slate:after');
 
 function AfterPlugin() {
   var isDraggingInternally = null;
+  var isMouseDown = false;
 
   /**
    * On before input.
@@ -4233,6 +4239,30 @@ function AfterPlugin() {
   }
 
   /**
+   * On focus.
+   *
+   * @param {Event} event
+   * @param {Editor} editor
+   * @param {Function} next
+   */
+
+  function onFocus(event, editor, next) {
+    debug$2('onFocus', { event: event });
+
+    // COMPAT: If the focus event is a mouse-based one, it will be shortly
+    // followed by a `selectionchange`, so we need to deselect here to prevent
+    // the old selection from being set by the `updateSelection` of `<Content>`,
+    // preventing the `selectionchange` from firing. (2018/11/07)
+    if (isMouseDown) {
+      editor.deselect().focus();
+    } else {
+      editor.focus();
+    }
+
+    next();
+  }
+
+  /**
    * On input.
    *
    * @param {Event} event
@@ -4442,6 +4472,34 @@ function AfterPlugin() {
   }
 
   /**
+   * On mouse down.
+   *
+   * @param {Event} event
+   * @param {Editor} editor
+   * @param {Function} next
+   */
+
+  function onMouseDown(event, editor, next) {
+    debug$2('onMouseDown', { event: event });
+    isMouseDown = true;
+    next();
+  }
+
+  /**
+   * On mouse up.
+   *
+   * @param {Event} event
+   * @param {Editor} editor
+   * @param {Function} next
+   */
+
+  function onMouseUp(event, editor, next) {
+    debug$2('onMouseUp', { event: event });
+    isMouseDown = false;
+    next();
+  }
+
+  /**
    * On paste.
    *
    * @param {Event} event
@@ -4506,7 +4564,10 @@ function AfterPlugin() {
 
     // Otherwise, determine the Slate selection from the native one.
     var range = findRange(native, editor);
-    if (!range) return;
+
+    if (!range) {
+      return;
+    }
 
     var _range = range,
         anchor = _range.anchor,
@@ -4571,8 +4632,11 @@ function AfterPlugin() {
     onDragEnd: onDragEnd,
     onDragStart: onDragStart,
     onDrop: onDrop,
+    onFocus: onFocus,
     onInput: onInput,
     onKeyDown: onKeyDown,
+    onMouseDown: onMouseDown,
+    onMouseUp: onMouseUp,
     onPaste: onPaste,
     onSelect: onSelect
   };
@@ -5993,7 +6057,7 @@ var Leaf = function (_React$Component) {
       if (editor.query('isVoid', parent)) {
         return React.createElement(
           'span',
-          { 'data-slate-zero-width': 'z' },
+          { 'data-slate-zero-width': 'z', 'data-slate-length': parent.text.length },
           '\uFEFF'
         );
       }
@@ -6004,7 +6068,7 @@ var Leaf = function (_React$Component) {
       if (text === '' && parent.object === 'block' && parent.text === '' && parent.nodes.last() === node) {
         return React.createElement(
           'span',
-          { 'data-slate-zero-width': 'n' },
+          { 'data-slate-zero-width': 'n', 'data-slate-length': 0 },
           '\uFEFF',
           React.createElement('br', null)
         );
@@ -6016,7 +6080,7 @@ var Leaf = function (_React$Component) {
       if (text === '') {
         return React.createElement(
           'span',
-          { 'data-slate-zero-width': 'z' },
+          { 'data-slate-zero-width': 'z', 'data-slate-length': 0 },
           '\uFEFF'
         );
       }
@@ -6027,7 +6091,11 @@ var Leaf = function (_React$Component) {
       var lastChar = text.charAt(text.length - 1);
       var isLastText = node === lastText;
       var isLastLeaf = index === leaves.size - 1;
-      if (isLastText && isLastLeaf && lastChar === '\n') return text + '\n';
+      if (isLastText && isLastLeaf && lastChar === '\n') return React.createElement(
+        'span',
+        { 'data-slate-content': true },
+        text + '\n'
+      );
 
       // Otherwise, just return the content.
       return React.createElement(
@@ -7078,87 +7146,105 @@ var Content = function (_React$Component) {
 
       var window = getWindow_1(_this.element);
       var native = window.getSelection();
+      var activeElement = window.document.activeElement;
 
-      // .getSelection() can return null in some cases
-      // https://bugzilla.mozilla.org/show_bug.cgi?id=827585
-      if (!native) return;
+      // COMPAT: In Firefox, there's a but where `getSelection` can return `null`.
+      // https://bugzilla.mozilla.org/show_bug.cgi?id=827585 (2018/11/07)
+
+      if (!native) {
+        return;
+      }
 
       var rangeCount = native.rangeCount,
           anchorNode = native.anchorNode;
 
-      // If both selections are blurred, do nothing.
+      var updated = false;
 
-      if (!rangeCount && selection.isBlurred) return;
-
-      // If the selection has been blurred, but is still inside the editor in the
-      // DOM, blur it manually.
-      if (selection.isBlurred) {
-        if (!_this.isInEditor(anchorNode)) return;
-        removeAllRanges(native);
+      // If the Slate selection is blurred, but the DOM's active element is still
+      // the editor, we need to blur it.
+      if (selection.isBlurred && activeElement === _this.element) {
         _this.element.blur();
-        debug$8('updateSelection', { selection: selection, native: native });
-        return;
+        updated = true;
       }
 
-      // If the selection isn't set, do nothing.
-      if (selection.isUnset) return;
+      // If the Slate selection is unset, but the DOM selection has a range
+      // selected in the editor, we need to remove the range.
+      if (selection.isUnset && rangeCount && _this.isInEditor(anchorNode)) {
+        removeAllRanges(native);
+        updated = true;
+      }
+
+      // If the Slate selection is focused, but the DOM's active element is not
+      // the editor, we need to focus it.
+      if (selection.isFocused && activeElement !== _this.element) {
+        _this.element.focus();
+        updated = true;
+      }
 
       // Otherwise, figure out which DOM nodes should be selected...
-      var current = !!native.rangeCount && native.getRangeAt(0);
-      var range = findDOMRange(selection, window);
+      if (selection.isFocused && selection.isSet) {
+        var current = !!rangeCount && native.getRangeAt(0);
+        var range = findDOMRange(selection, window);
 
-      if (!range) {
-        index$2(false, 'Unable to find a native DOM range from the current selection.');
+        if (!range) {
+          index$2(false, 'Unable to find a native DOM range from the current selection.');
 
-        return;
-      }
-
-      var startContainer = range.startContainer,
-          startOffset = range.startOffset,
-          endContainer = range.endContainer,
-          endOffset = range.endOffset;
-
-      // If the new range matches the current selection, there is nothing to fix.
-      // COMPAT: The native `Range` object always has it's "start" first and "end"
-      // last in the DOM. It has no concept of "backwards/forwards", so we have
-      // to check both orientations here. (2017/10/31)
-
-      if (current) {
-        if (startContainer == current.startContainer && startOffset == current.startOffset && endContainer == current.endContainer && endOffset == current.endOffset || startContainer == current.endContainer && startOffset == current.endOffset && endContainer == current.startContainer && endOffset == current.startOffset) {
           return;
         }
-      }
 
-      // Otherwise, set the `isUpdatingSelection` flag and update the selection.
-      _this.tmp.isUpdatingSelection = true;
-      removeAllRanges(native);
+        var startContainer = range.startContainer,
+            startOffset = range.startOffset,
+            endContainer = range.endContainer,
+            endOffset = range.endOffset;
 
-      // COMPAT: IE 11 does not support Selection.setBaseAndExtent
-      if (native.setBaseAndExtent) {
-        // COMPAT: Since the DOM range has no concept of backwards/forwards
-        // we need to check and do the right thing here.
-        if (isBackward) {
-          native.setBaseAndExtent(range.endContainer, range.endOffset, range.startContainer, range.startOffset);
-        } else {
-          native.setBaseAndExtent(range.startContainer, range.startOffset, range.endContainer, range.endOffset);
+        // If the new range matches the current selection, there is nothing to fix.
+        // COMPAT: The native `Range` object always has it's "start" first and "end"
+        // last in the DOM. It has no concept of "backwards/forwards", so we have
+        // to check both orientations here. (2017/10/31)
+
+        if (current) {
+          if (startContainer == current.startContainer && startOffset == current.startOffset && endContainer == current.endContainer && endOffset == current.endOffset || startContainer == current.endContainer && startOffset == current.endOffset && endContainer == current.startContainer && endOffset == current.startOffset) {
+            return;
+          }
         }
-      } else {
-        // COMPAT: IE 11 does not support Selection.extend, fallback to addRange
-        native.addRange(range);
+
+        // Otherwise, set the `isUpdatingSelection` flag and update the selection.
+        updated = true;
+        _this.tmp.isUpdatingSelection = true;
+        removeAllRanges(native);
+
+        // COMPAT: IE 11 does not support `setBaseAndExtent`. (2018/11/07)
+        if (native.setBaseAndExtent) {
+          // COMPAT: Since the DOM range has no concept of backwards/forwards
+          // we need to check and do the right thing here.
+          if (isBackward) {
+            native.setBaseAndExtent(range.endContainer, range.endOffset, range.startContainer, range.startOffset);
+          } else {
+            native.setBaseAndExtent(range.startContainer, range.startOffset, range.endContainer, range.endOffset);
+          }
+        } else {
+          native.addRange(range);
+        }
+
+        // Scroll to the selection, in case it's out of view.
+        scrollToSelection(native);
+
+        // Then unset the `isUpdatingSelection` flag after a delay, to ensure that
+        // it is still set when selection-related events from updating it fire.
+        setTimeout(function () {
+          // COMPAT: In Firefox, it's not enough to create a range, you also need
+          // to focus the contenteditable element too. (2016/11/16)
+          if (IS_FIREFOX && _this.element) {
+            _this.element.focus();
+          }
+
+          _this.tmp.isUpdatingSelection = false;
+        });
       }
 
-      // Scroll to the selection, in case it's out of view.
-      scrollToSelection(native);
-
-      // Then unset the `isUpdatingSelection` flag after a delay.
-      setTimeout(function () {
-        // COMPAT: In Firefox, it's not enough to create a range, you also need to
-        // focus the contenteditable element too. (2016/11/16)
-        if (IS_FIREFOX && _this.element) _this.element.focus();
-        _this.tmp.isUpdatingSelection = false;
-      });
-
-      debug$8('updateSelection', { selection: selection, native: native });
+      if (updated) {
+        debug$8('updateSelection', { selection: selection, native: native, activeElement: activeElement });
+      }
     }, _this.ref = function (element) {
       _this.element = element;
     }, _this.isInEditor = function (target) {
@@ -7355,16 +7441,19 @@ var Content = function (_React$Component) {
 
       // Don't handle drag and drop events coming from embedded editors.
       if (handler == 'onDragEnd' || handler == 'onDragEnter' || handler == 'onDragExit' || handler == 'onDragLeave' || handler == 'onDragOver' || handler == 'onDragStart' || handler == 'onDrop') {
-        var target = event.target;
+        var closest = event.target.closest('[data-slate-editor]');
 
-        var targetEditorNode = target.closest('[data-slate-editor]');
-        if (targetEditorNode !== this.element) return;
+        if (closest !== this.element) {
+          return;
+        }
       }
 
       // Some events require being in editable in the editor, so if the event
       // target isn't, ignore them.
       if (handler == 'onBeforeInput' || handler == 'onBlur' || handler == 'onCompositionEnd' || handler == 'onCompositionStart' || handler == 'onCopy' || handler == 'onCut' || handler == 'onFocus' || handler == 'onInput' || handler == 'onKeyDown' || handler == 'onKeyUp' || handler == 'onPaste' || handler == 'onSelect') {
-        if (!this.isInEditor(event.target)) return;
+        if (!this.isInEditor(event.target)) {
+          return;
+        }
       }
 
       this.props.onEvent(handler, event);
@@ -7394,7 +7483,8 @@ var Content = function (_React$Component) {
 
       var props = this.props,
           handlers = this.handlers;
-      var className = props.className,
+      var id = props.id,
+          className = props.className,
           readOnly = props.readOnly,
           editor = props.editor,
           tabIndex = props.tabIndex,
@@ -7437,6 +7527,7 @@ var Content = function (_React$Component) {
           'data-key': document.key,
           contentEditable: readOnly ? null : true,
           suppressContentEditableWarning: true,
+          id: id,
           className: className,
           autoCorrect: props.autoCorrect ? 'on' : 'off',
           spellCheck: spellCheck,
@@ -7474,6 +7565,7 @@ Content.propTypes = {
   autoCorrect: propTypes.bool.isRequired,
   className: propTypes.string,
   editor: propTypes.object.isRequired,
+  id: propTypes.string,
   readOnly: propTypes.bool.isRequired,
   role: propTypes.string,
   spellCheck: propTypes.bool.isRequired,
@@ -7532,6 +7624,7 @@ function ReactPlugin() {
       autoCorrect: props.autoCorrect,
       className: props.className,
       editor: editor,
+      id: props.id,
       onEvent: function onEvent(handler, event) {
         return editor.run(handler, event);
       },
@@ -7590,7 +7683,7 @@ function ReactPlugin() {
     ret.push(SlateReactPlaceholder({
       placeholder: placeholder,
       when: function when(editor, node) {
-        return node.object === 'document' && node.text === '' && node.nodes.size === 1;
+        return node.object === 'document' && node.text === '' && node.nodes.size === 1 && node.getTexts().size === 1;
       }
     }));
   }
@@ -7632,7 +7725,15 @@ var Editor = function (_React$Component) {
       args[_key] = arguments[_key];
     }
 
-    return _ret = (_temp = (_this = possibleConstructorReturn(this, (_ref = Editor.__proto__ || Object.getPrototypeOf(Editor)).call.apply(_ref, [this].concat(args))), _this), _this.state = {}, _this.tmp = {
+    return _ret = (_temp = (_this = possibleConstructorReturn(this, (_ref = Editor.__proto__ || Object.getPrototypeOf(Editor)).call.apply(_ref, [this].concat(args))), _this), _this.state = { value: _this.props.defaultValue
+
+      /**
+       * Temporary values.
+       *
+       * @type {Object}
+       */
+
+    }, _this.tmp = {
       mounted: false,
       change: null,
       resolves: 0,
@@ -7646,11 +7747,13 @@ var Editor = function (_React$Component) {
       index$2(_this.tmp.resolves < 5 || _this.tmp.resolves !== _this.tmp.updates, 'A Slate <Editor> component is re-resolving the `plugins`, `schema`, `commands`, `queries` or `placeholder` prop on each update, which leads to poor performance. This is often due to passing in a new references for these props with each render by declaring them inline in your render function. Do not do this! Declare them outside your render function, or memoize them instead.');
 
       _this.tmp.resolves++;
-      var react = ReactPlugin(_this.props);
+      var react = ReactPlugin(_extends$1({}, _this.props, {
+        value: _this.props.value || _this.state.value
+      }));
 
       var onChange = function onChange(change) {
         if (_this.tmp.mounted) {
-          _this.props.onChange(change);
+          _this.handleChange(change);
         } else {
           _this.tmp.change = change;
         }
@@ -7679,12 +7782,6 @@ var Editor = function (_React$Component) {
    * @type {Object}
    */
 
-  /**
-   * Temporary values.
-   *
-   * @type {Object}
-   */
-
   createClass(Editor, [{
     key: 'componentDidMount',
     value: function componentDidMount() {
@@ -7696,7 +7793,7 @@ var Editor = function (_React$Component) {
       }
 
       if (this.tmp.change) {
-        this.props.onChange(this.tmp.change);
+        this.handleChange(this.tmp.change);
         this.tmp.change = null;
       }
     }
@@ -7711,9 +7808,19 @@ var Editor = function (_React$Component) {
       this.tmp.updates++;
 
       if (this.tmp.change) {
-        this.props.onChange(this.tmp.change);
+        this.handleChange(this.tmp.change);
         this.tmp.change = null;
       }
+    }
+
+    /**
+     * When the component unmounts, make sure async commands don't trigger react updates.
+     */
+
+  }, {
+    key: 'componentWillUnmount',
+    value: function componentWillUnmount() {
+      this.tmp.mounted = false;
     }
 
     /**
@@ -7740,13 +7847,17 @@ var Editor = function (_React$Component) {
       // Set the current props on the controller.
       var options = props.options,
           readOnly = props.readOnly,
-          value = props.value;
+          valueFromProps = props.value;
+      var valueFromState = this.state.value;
 
+      var value = valueFromProps || valueFromState;
       this.controller.setReadOnly(readOnly);
       this.controller.setValue(value, options);
 
       // Render the editor's children with the controller.
-      var children = this.controller.run('renderEditor', props);
+      var children = this.controller.run('renderEditor', _extends$1({}, props, {
+        value: value
+      }));
       return children;
     }
 
@@ -7764,6 +7875,26 @@ var Editor = function (_React$Component) {
      */
 
   }, {
+    key: 'handleChange',
+    value: function handleChange(change) {
+      var onChange = this.props.onChange;
+      var value = this.state.value;
+
+
+      if (value) {
+        // Syncing value inside this component since parent does not want control of it (defaultValue was used)
+        this.setState({ value: change.value });
+      }
+
+      onChange(change);
+    }
+
+    /**
+     * Mimic the API of the `Editor` controller, so that this component instance
+     * can be passed in its place to plugins.
+     */
+
+  }, {
     key: 'applyOperation',
     value: function applyOperation() {
       var _controller;
@@ -7778,46 +7909,60 @@ var Editor = function (_React$Component) {
       return (_controller2 = this.controller).command.apply(_controller2, arguments);
     }
   }, {
-    key: 'normalize',
-    value: function normalize() {
+    key: 'hasCommand',
+    value: function hasCommand() {
       var _controller3;
 
-      return (_controller3 = this.controller).normalize.apply(_controller3, arguments);
+      return (_controller3 = this.controller).hasCommand.apply(_controller3, arguments);
+    }
+  }, {
+    key: 'hasQuery',
+    value: function hasQuery() {
+      var _controller4;
+
+      return (_controller4 = this.controller).hasQuery.apply(_controller4, arguments);
+    }
+  }, {
+    key: 'normalize',
+    value: function normalize() {
+      var _controller5;
+
+      return (_controller5 = this.controller).normalize.apply(_controller5, arguments);
     }
   }, {
     key: 'query',
     value: function query() {
-      var _controller4;
+      var _controller6;
 
-      return (_controller4 = this.controller).query.apply(_controller4, arguments);
+      return (_controller6 = this.controller).query.apply(_controller6, arguments);
     }
   }, {
     key: 'registerCommand',
     value: function registerCommand() {
-      var _controller5;
+      var _controller7;
 
-      return (_controller5 = this.controller).registerCommand.apply(_controller5, arguments);
+      return (_controller7 = this.controller).registerCommand.apply(_controller7, arguments);
     }
   }, {
     key: 'registerQuery',
     value: function registerQuery() {
-      var _controller6;
+      var _controller8;
 
-      return (_controller6 = this.controller).registerQuery.apply(_controller6, arguments);
+      return (_controller8 = this.controller).registerQuery.apply(_controller8, arguments);
     }
   }, {
     key: 'run',
     value: function run() {
-      var _controller7;
+      var _controller9;
 
-      return (_controller7 = this.controller).run.apply(_controller7, arguments);
+      return (_controller9 = this.controller).run.apply(_controller9, arguments);
     }
   }, {
     key: 'withoutNormalizing',
     value: function withoutNormalizing() {
-      var _controller8;
+      var _controller10;
 
-      return (_controller8 = this.controller).withoutNormalizing.apply(_controller8, arguments);
+      return (_controller10 = this.controller).withoutNormalizing.apply(_controller10, arguments);
     }
 
     /**
@@ -7827,68 +7972,61 @@ var Editor = function (_React$Component) {
   }, {
     key: 'call',
     value: function call() {
-      var _controller9;
+      var _controller11;
 
-      return (_controller9 = this.controller).call.apply(_controller9, arguments);
+      return (_controller11 = this.controller).call.apply(_controller11, arguments);
     }
   }, {
     key: 'change',
     value: function change() {
-      var _controller10;
+      var _controller12;
 
-      return (_controller10 = this.controller).change.apply(_controller10, arguments);
+      return (_controller12 = this.controller).change.apply(_controller12, arguments);
     }
   }, {
     key: 'onChange',
     value: function onChange() {
-      var _controller11;
+      var _controller13;
 
-      return (_controller11 = this.controller).onChange.apply(_controller11, arguments);
+      return (_controller13 = this.controller).onChange.apply(_controller13, arguments);
     }
   }, {
     key: 'applyOperations',
     value: function applyOperations() {
-      var _controller12;
+      var _controller14;
 
-      return (_controller12 = this.controller).applyOperations.apply(_controller12, arguments);
+      return (_controller14 = this.controller).applyOperations.apply(_controller14, arguments);
     }
   }, {
     key: 'setOperationFlag',
     value: function setOperationFlag() {
-      var _controller13;
+      var _controller15;
 
-      return (_controller13 = this.controller).setOperationFlag.apply(_controller13, arguments);
+      return (_controller15 = this.controller).setOperationFlag.apply(_controller15, arguments);
     }
   }, {
     key: 'getFlag',
     value: function getFlag() {
-      var _controller14;
+      var _controller16;
 
-      return (_controller14 = this.controller).getFlag.apply(_controller14, arguments);
+      return (_controller16 = this.controller).getFlag.apply(_controller16, arguments);
     }
   }, {
     key: 'unsetOperationFlag',
     value: function unsetOperationFlag() {
-      var _controller15;
+      var _controller17;
 
-      return (_controller15 = this.controller).unsetOperationFlag.apply(_controller15, arguments);
+      return (_controller17 = this.controller).unsetOperationFlag.apply(_controller17, arguments);
     }
   }, {
     key: 'withoutNormalization',
     value: function withoutNormalization() {
-      var _controller16;
+      var _controller18;
 
-      return (_controller16 = this.controller).withoutNormalization.apply(_controller16, arguments);
+      return (_controller18 = this.controller).withoutNormalization.apply(_controller18, arguments);
     }
   }, {
     key: 'operations',
-
-
-    /**
-     * Mimic the API of the `Editor` controller, so that this component instance
-     * can be passed in its place to plugins.
-     */
-
     get: function get$$1() {
       return this.controller.operations;
     }
@@ -7931,6 +8069,8 @@ Editor.propTypes = _extends$1({
   autoCorrect: propTypes.bool,
   autoFocus: propTypes.bool,
   className: propTypes.string,
+  defaultValue: Types.value,
+  id: propTypes.string,
   onChange: propTypes.func,
   options: propTypes.object,
   placeholder: propTypes.any,
@@ -7941,7 +8081,7 @@ Editor.propTypes = _extends$1({
   spellCheck: propTypes.bool,
   style: propTypes.object,
   tabIndex: propTypes.number,
-  value: Types.value.isRequired
+  value: Types.value
 }, EVENT_HANDLERS.reduce(function (obj, handler) {
   obj[handler] = propTypes.func;
   return obj;
